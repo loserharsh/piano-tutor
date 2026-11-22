@@ -115,12 +115,18 @@ async function toggleMic() {
   }
 }
 
+let lastDomSnapMs = 0;
+
 function handleAudioSnapshot(snap) {
   state.latestSnapshot = snap;
 
   if (state.calibratingNoise) {
     state.noiseSamples.push(snap.rmsDb);
   }
+
+  const now = performance.now();
+  if (now - lastDomSnapMs < 50) return;
+  lastDomSnapMs = now;
 
   // Update Calibration screen
   if (state.view === 'calibrate') {
@@ -772,14 +778,14 @@ function hydrateSettingsUi() {
   $('setA4Val').textContent = `${state.a4ReferenceHz} Hz`;
 }
 
-// Register PWA service worker for offline & installable desktop/mobile support
+// Register PWA service worker and auto-reload cleanly when a new version activates
 if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('./sw.js').catch(() => {});
+  navigator.serviceWorker.register('./sw.js', { updateViaCache: 'none' }).catch(() => {});
 }
 
-// Init
+// Init (wire events first so UI buttons are always responsive)
+wireEvents();
 hydrateSettingsUi();
 renderSongLibrary();
 loadSongIntoPractice(state.songs[0]);
-wireEvents();
 requestAnimationFrame(animationLoop);

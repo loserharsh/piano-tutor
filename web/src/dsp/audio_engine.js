@@ -345,7 +345,7 @@ export class WebMicrophoneCapture {
       mode: options.mode || 'polyphonic',
       sampleRate: this.audioCtx.sampleRate,
       frameSize: 4096,
-      hopSize: 512,
+      hopSize: 1024, // ~21 ms @ 48 kHz: low latency without saturating mobile main thread
       noiseGateDb: options.noiseGateDb ?? -50.0,
       a4ReferenceHz: options.a4ReferenceHz ?? 440.0,
     });
@@ -353,9 +353,7 @@ export class WebMicrophoneCapture {
     this.pipeline.onSnapshot = options.onSnapshot || null;
 
     this.sourceNode = this.audioCtx.createMediaStreamSource(this.stream);
-    // Use ScriptProcessorNode (universally supported across local file/HTTP/Android/Linux/Windows)
-    // with 512-sample blocks feeding our lock-free hop accumulator.
-    this.processorNode = this.audioCtx.createScriptProcessor(512, 1, 1);
+    this.processorNode = this.audioCtx.createScriptProcessor(2048, 1, 1);
     this.processorNode.onaudioprocess = (ev) => {
       if (!this.isRunning || !this.pipeline) return;
       const input = ev.inputBuffer.getChannelData(0);
