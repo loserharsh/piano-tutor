@@ -1,4 +1,4 @@
-const CACHE_NAME = 'pianotutor-v2';
+const CACHE_NAME = 'pianotutor-v3';
 const ASSETS = [
   './',
   './index.html',

@@ -52,6 +52,8 @@ const state = {
   loopEndMeasure: 2,
   waitMode: false,
   waitingForMidis: [],
+  soundEnabled: false,
+  soundedNotes: new Set(),
 
   // Live mic feedback flashes on keyboard
   flashKeys: new Map(), // midi -> { state: 'correct'|'wrong', untilMs }
@@ -344,7 +346,7 @@ function populateLoopMeasureSelectors(song) {
 
 function loadSongIntoPractice(song) {
   previewSynth.stop();
-  $('btnPreviewSong').textContent = 'Preview';
+  state.soundedNotes.clear();
   state.currentSong = song;
   state.isPlaying = false;
   $('btnPlayPause').textContent = 'Play';
@@ -393,7 +395,7 @@ function getLoopBounds() {
 
 function restartPractice() {
   previewSynth.stop();
-  $('btnPreviewSong').textContent = 'Preview';
+  state.soundedNotes.clear();
   state.isPlaying = false;
   $('btnPlayPause').textContent = 'Play';
   state.waitingForMidis = [];
@@ -448,6 +450,7 @@ function animationLoop(nowMs) {
   state.lastFrameMs = nowMs;
 
   if (state.isPlaying) {
+    const prevTime = state.currentTimeSec;
     const nextTime = state.currentTimeSec + dtSec * state.tempoScale;
     const tickRes = state.tutor.tick(nextTime, state.tempoScale);
 
@@ -457,10 +460,24 @@ function animationLoop(nowMs) {
     } else {
       state.waitingForMidis = [];
       state.currentTimeSec = nextTime;
+
+      // Play synchronized reference piano audio for each note crossing the strike line
+      if (state.soundEnabled) {
+        for (let i = 0; i < state.filteredNotes.length; i++) {
+          if (state.soundedNotes.has(i)) continue;
+          const n = state.filteredNotes[i];
+          if (n.startSec >= prevTime - 0.05 && n.startSec <= state.currentTimeSec) {
+            state.soundedNotes.add(i);
+            previewSynth.playNoteNow(n.midiPitch, n.durationSec / state.tempoScale, n.velocity ?? 0.8);
+          }
+        }
+      }
+
       if (state.loopEnabled) {
         const [lStart, lEnd] = getLoopBounds();
         if (state.currentTimeSec >= lEnd) {
           state.currentTimeSec = lStart;
+          state.soundedNotes.clear();
           state.tutor.reset();
         }
       } else if (state.currentTimeSec >= state.currentSong.totalDurationSec + 0.6) {
@@ -582,29 +599,33 @@ function wireEvents() {
 
   // Practice controls
   $('btnPlayPause').addEventListener('click', async () => {
-    previewSynth.stop();
-    $('btnPreviewSong').textContent = 'Preview';
-    if (!state.isPlaying && !mic.isRunning) {
+    if (state.soundEnabled) await previewSynth.ensureContext();
+    if (!state.isPlaying && !mic.isRunning && !state.soundEnabled) {
       await toggleMic();
     }
     state.isPlaying = !state.isPlaying;
     $('btnPlayPause').textContent = state.isPlaying ? 'Pause' : 'Play';
   });
   $('btnRestart').addEventListener('click', restartPractice);
-  $('btnPreviewSong').addEventListener('click', async () => {
-    if (previewSynth.isPlaying) {
+  $('btnPlaySound').addEventListener('click', async () => {
+    state.soundEnabled = !state.soundEnabled;
+    const btn = $('btnPlaySound');
+    if (state.soundEnabled) {
+      await previewSynth.ensureContext();
+      btn.textContent = 'Play Sound: On';
+      btn.classList.remove('btn-secondary');
+      btn.classList.add('btn-primary');
+      // If not already playing, start playback immediately so the user hears it right away!
+      if (!state.isPlaying) {
+        state.isPlaying = true;
+        $('btnPlayPause').textContent = 'Pause';
+      }
+    } else {
       previewSynth.stop();
-      $('btnPreviewSong').textContent = 'Preview';
-      return;
+      btn.textContent = 'Play Sound: Off';
+      btn.classList.remove('btn-primary');
+      btn.classList.add('btn-secondary');
     }
-    // Disable mic during speaker preview to avoid feedback loop
-    if (mic.isRunning) await toggleMic();
-    state.isPlaying = false;
-    $('btnPlayPause').textContent = 'Play';
-    $('btnPreviewSong').textContent = 'Stop Preview';
-    await previewSynth.playSong(state.filteredNotes, state.tempoScale, () => {
-      $('btnPreviewSong').textContent = 'Preview';
-    });
   });
   $('btnFinish').addEventListener('click', showPracticeResults);
 
@@ -649,6 +670,7 @@ function wireEvents() {
   });
   $('rngScrub').addEventListener('input', (e) => {
     state.currentTimeSec = Number(e.target.value);
+    state.soundedNotes.clear();
   });
 
   // Calibration

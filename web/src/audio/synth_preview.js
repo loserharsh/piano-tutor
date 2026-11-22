@@ -26,13 +26,28 @@ export class PianoPreviewSynth {
     this.activeNodes = [];
   }
 
+  async ensureContext() {
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    if (!this.ctx) this.ctx = new AudioCtx();
+    if (this.ctx.state === 'suspended') await this.ctx.resume();
+    return this.ctx;
+  }
+
+  playNoteNow(midi, durationSec = 0.45, velocity = 0.8) {
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    if (!this.ctx) this.ctx = new AudioCtx();
+    if (this.ctx.state === 'suspended') {
+      this.ctx.resume().catch(() => {});
+    }
+    const now = this.ctx.currentTime + 0.005;
+    this._scheduleTone(midi, now, Math.max(0.08, Math.min(3.5, durationSec)), velocity * 0.24);
+  }
+
   async playSong(notes, tempoScale = 1.0, onEnded = null) {
     this.stop();
     if (!notes || notes.length === 0) return;
 
-    const AudioCtx = window.AudioContext || window.webkitAudioContext;
-    if (!this.ctx) this.ctx = new AudioCtx();
-    if (this.ctx.state === 'suspended') await this.ctx.resume();
+    await this.ensureContext();
 
     const now = this.ctx.currentTime + 0.05;
     const scale = Math.max(0.25, tempoScale);
