@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#141922" />
+  <title>PianoTutor — Microphone-Based Real Piano Learning</title>
+  <link rel="manifest" href="./manifest.json" />
+  <link rel="icon" type="image/svg+xml" href="./icon.svg" />
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark">PT</span>
+      <div>
+        <div class="brand-title">PianoTutor</div>
+        <div class="brand-sub">Microphone-Only Real Piano Tutor · No MIDI Hardware</div>
+      </div>
+    </div>
+
+    <nav class="nav-tabs" id="navTabs">
+      <button class="tab active" data-view="library">Song Library</button>
+      <button class="tab" data-view="practice">Practice</button>
+      <button class="tab" data-view="calibrate">Calibrate Mic</button>
+      <button class="tab" data-view="tester">Mic Tester</button>
+      <button class="tab" data-view="settings">Settings</button>
+    </nav>
+
+    <div class="mic-status-bar">
+      <select id="selRecognitionMode" class="select" title="Recognition Engine Mode">
+        <option value="polyphonic" selected>Polyphonic (Chords)</option>
+        <option value="monophonic">Monophonic (YIN)</option>
+      </select>
+      <span id="micDot" class="status-dot"></span>
+      <span id="micStatusText" class="mono">Mic Off</span>
+      <button id="globalMicBtn" class="btn btn-primary">Enable Mic</button>
+    </div>
+  </header>
+
+  <div id="errorBanner" class="error-banner hidden"></div>
+
+  <main class="main-container">
+    <!-- VIEW 1: SONG LIBRARY & PROGRESS -->
+    <section id="view-library" class="view active">
+      <div class="section-header">
+        <div>
+          <h1>Song Library</h1>
+          <p class="muted">Play on your real acoustic piano or keyboard speakers. Import MIDI (song data only), MusicXML, or ABC notation.</p>
+        </div>
+        <div class="import-actions toolbar-group">
+          <button id="btnPasteAbc" class="btn btn-secondary">Paste ABC</button>
+          <label class="btn btn-secondary file-btn">
+            Import .mid / .musicxml / .abc
+            <input type="file" id="songFileInput" accept=".mid,.midi,.xml,.musicxml,.abc" hidden />
+          </label>
+        </div>
+      </div>
+
+      <div id="progressSummary" class="card" style="margin-bottom:16px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
+        <div class="mono" style="display:flex; gap:18px; flex-wrap:wrap;">
+          <span>Sessions: <strong id="progSessions">0</strong></span>
+          <span>Avg Accuracy: <strong id="progAvgAcc">--</strong></span>
+          <span>Songs Mastered (≥90%): <strong id="progMastered">0</strong></span>
+        </div>
+        <span class="muted" style="font-size:12px;">Saved locally on this device</span>
+      </div>
+
+      <div id="songGrid" class="song-grid"></div>
+
+      <div id="recentSessionsCard" class="card hidden" style="margin-top:18px;">
+        <div class="label-xs" style="margin-bottom:8px;">RECENT PRACTICE SESSIONS</div>
+        <div id="recentSessionsList" class="events-list mono"></div>
+      </div>
+    </section>
+
+    <!-- VIEW 2: PIANO PRACTICE (MILESTONE 4 & 5 REAL-TIME TUTOR) -->
+    <section id="view-practice" class="view practice-layout">
+      <div class="practice-toolbar">
+        <div class="toolbar-group">
+          <button id="btnPlayPause" class="btn btn-primary">Play</button>
+          <button id="btnRestart" class="btn btn-secondary">Restart</button>
+          <button id="btnPreviewSong" class="btn btn-secondary" title="Listen to reference audio (pauses mic)">Preview</button>
+          <button id="btnFinish" class="btn btn-secondary">Results</button>
+        </div>
+
+        <div class="toolbar-group">
+          <label class="toggle-chip">
+            <input type="checkbox" id="chkWaitMode" />
+            <span>Wait-Until-Correct</span>
+          </label>
+          <select id="selHand" class="select">
+            <option value="both">Both Hands</option>
+            <option value="right">Right Hand</option>
+            <option value="left">Left Hand</option>
+          </select>
+          <select id="selRange" class="select">
+            <option value="48,84">3 Oct (C3–C6)</option>
+            <option value="36,96">5 Oct (C2–C7)</option>
+            <option value="21,108">88 Keys (A0–C8)</option>
+          </select>
+        </div>
+
+        <div class="toolbar-group sliders">
+          <label class="slider-label">
+            Tempo <span id="lblTempo" class="mono">100%</span>
+            <input type="range" id="rngTempo" min="25" max="150" step="5" value="100" />
+          </label>
+          <label class="slider-label">
+            Speed <span id="lblSpeed" class="mono">180</span>
+            <input type="range" id="rngSpeed" min="100" max="360" step="10" value="180" />
+          </label>
+          <label class="toggle-chip">
+            <input type="checkbox" id="chkLoop" />
+            <span>Loop</span>
+          </label>
+          <select id="selLoopStart" class="select" title="Loop Start Measure"></select>
+          <select id="selLoopEnd" class="select" title="Loop End Measure"></select>
+        </div>
+      </div>
+
+      <div class="hud-strip">
+        <div class="hud-song">
+          <strong id="hudSongTitle">C Major Scale</strong>
+          <span id="hudDetectedNote" class="pill mono">Heard: --</span>
+          <span id="hudFeedback" class="feedback-badge">Ready</span>
+        </div>
+        <div class="hud-metrics mono">
+          <span>Acc: <strong id="hudAccuracy">100%</strong></span>
+          <span>Correct: <strong id="hudCorrect" class="text-green">0</strong></span>
+          <span>Missed: <strong id="hudMissed" class="text-slate">0</strong></span>
+          <span>Extra: <strong id="hudExtra" class="text-red">0</strong></span>
+          <span>Streak: <strong id="hudStreak">0</strong></span>
+        </div>
+      </div>
+
+      <div class="scrub-row">
+        <span id="lblCurTime" class="mono">0.0s</span>
+        <input type="range" id="rngScrub" min="-1.5" max="10" step="0.05" value="-1.5" />
+        <span id="lblTotalTime" class="mono">0.0s</span>
+      </div>
+
+      <div class="stage-wrapper">
+        <canvas id="fallingCanvas" class="falling-canvas"></canvas>
+        <canvas id="keyboardCanvas" class="keyboard-canvas"></canvas>
+      </div>
+    </section>
+
+    <!-- VIEW 3: MICROPHONE CALIBRATION -->
+    <section id="view-calibrate" class="view">
+      <h1>Microphone Calibration</h1>
+      <p class="muted">Position your phone or computer microphone near the piano (30–90 cm away) and verify clean signal pickup.</p>
+
+      <div class="card-grid">
+        <div class="card">
+          <h3>1. Ambient Room Noise Floor</h3>
+          <p class="muted">Stay quiet for 3 seconds so PianoTutor can measure background noise and set an optimal noise gate.</p>
+          <div class="metric-row"><span>Current Input RMS</span><strong id="calRms" class="mono">-100.0 dB</strong></div>
+          <div class="metric-row"><span>Measured Noise Floor</span><strong id="calFloor" class="mono">-65.0 dB</strong></div>
+          <div class="metric-row"><span>Active Noise Gate</span><strong id="calGate" class="mono">-50.0 dB</strong></div>
+          <button id="btnAutoNoise" class="btn btn-primary" style="margin-top:12px;">Measure Room Noise (3s)</button>
+          <div id="calNoiseMsg" class="muted" style="margin-top:8px;"></div>
+        </div>
+
+        <div class="card">
+          <h3>2. Piano Audibility Check (Play Middle C / C4)</h3>
+          <p class="muted">Strike <strong>Middle C (C4 · 261.63 Hz)</strong> firmly on your piano to verify pitch accuracy and confidence.</p>
+          <div class="big-readout">
+            <span id="calNote" class="big-note mono">--</span>
+            <div>
+              <div class="mono" id="calFreq">0.00 Hz</div>
+              <div class="mono muted" id="calConf">Confidence: 0%</div>
+            </div>
+          </div>
+          <div id="calVerifyBadge" class="verify-box">Waiting for C4...</div>
+        </div>
+
+        <div class="card">
+          <h3>3. Microphone & Processing Latency</h3>
+          <p class="muted">Audio framing (4096 samples) + acoustic distance introduces ~55–90 ms of latency. PianoTutor subtracts this offset so you are not penalized for late timing.</p>
+          <label class="slider-label full">
+            Latency Compensation: <strong id="calLatencyVal" class="mono">65 ms</strong>
+            <input type="range" id="calLatencySlider" min="0" max="200" step="5" value="65" />
+          </label>
+        </div>
+      </div>
+    </section>
+
+    <!-- VIEW 4: AUDIO RECOGNITION TESTER (M1/M2 DIAGNOSTICS) -->
+    <section id="view-tester" class="view">
+      <div class="section-header">
+        <div>
+          <h1>Audio Recognition Tester</h1>
+          <p class="muted">Live FFT-YIN pitch detection, cents tuning offset, 64-bin spectrum, and melody recorder.</p>
+        </div>
+        <div class="toolbar-group">
+          <button id="btnRecMelody" class="btn btn-secondary">Record Melody</button>
+          <button id="btnExportCsv" class="btn btn-secondary" disabled>Export CSV</button>
+        </div>
+      </div>
+
+      <div class="tester-top card">
+        <div class="tester-note-block">
+          <div class="label-xs">RECOGNIZED NOTE</div>
+          <div id="testNote" class="big-note mono">--</div>
+          <div id="testMidi" class="muted mono">MIDI --</div>
+        </div>
+        <div class="tester-metrics">
+          <div class="metric-row"><span>Frequency</span><strong id="testFreq" class="mono">0.00 Hz</strong></div>
+          <div class="metric-row"><span>Cents Offset</span><strong id="testCents" class="mono">0.0 ¢</strong></div>
+          <div class="metric-row"><span>Confidence</span><strong id="testConf" class="mono">0%</strong></div>
+          <div class="progress-track"><div id="testConfBar" class="progress-fill"></div></div>
+          <div class="metric-row"><span>Input RMS / Floor</span><strong id="testRms" class="mono">-100 / -65 dB</strong></div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:12px;">
+        <div class="label-xs" style="margin-bottom:6px;">REAL-TIME LOG-FREQUENCY SPECTRUM (27.5 Hz A0 – 4500 Hz C8)</div>
+        <canvas id="spectrumCanvas" class="spectrum-canvas"></canvas>
+      </div>
+
+      <div class="card" style="margin-top:12px;">
+        <div class="label-xs" id="testEventsTitle" style="margin-bottom:6px;">DETECTED NOTE EVENTS</div>
+        <div id="testEventsList" class="events-list mono"></div>
+      </div>
+    </section>
+
+    <!-- VIEW 5: SETTINGS -->
+    <section id="view-settings" class="view">
+      <h1>Settings</h1>
+      <div class="card" style="max-width:560px;">
+        <label class="slider-label full">
+          Noise Gate Threshold: <strong id="setGateVal" class="mono">-50 dBFS</strong>
+          <input type="range" id="setGate" min="-70" max="-20" step="1" value="-50" />
+        </label>
+        <label class="slider-label full">
+          Timing Tolerance: <strong id="setTolVal" class="mono">±180 ms</strong>
+          <input type="range" id="setTol" min="60" max="350" step="10" value="180" />
+        </label>
+        <label class="slider-label full">
+          Microphone Latency Offset: <strong id="setLatVal" class="mono">65 ms</strong>
+          <input type="range" id="setLat" min="0" max="200" step="5" value="65" />
+        </label>
+        <label class="slider-label full">
+          Concert Pitch A4 Reference: <strong id="setA4Val" class="mono">440 Hz</strong>
+          <input type="range" id="setA4" min="432" max="446" step="1" value="440" />
+        </label>
+      </div>
+    </section>
+  </main>
+
+  <!-- PRACTICE RESULTS MODAL -->
+  <div id="resultsModal" class="modal hidden">
+    <div class="modal-card">
+      <h2>Practice Results</h2>
+      <p id="resSongTitle" class="muted"></p>
+      <div class="results-grid mono">
+        <div class="res-stat"><span class="label-xs">ACCURACY</span><strong id="resAccuracy">0%</strong></div>
+        <div class="res-stat"><span class="label-xs">F1 SCORE</span><strong id="resF1">0.00</strong></div>
+        <div class="res-stat"><span class="label-xs">CORRECT</span><strong id="resCorrect" class="text-green">0</strong></div>
+        <div class="res-stat"><span class="label-xs">MISSED</span><strong id="resMissed" class="text-slate">0</strong></div>
+        <div class="res-stat"><span class="label-xs">EXTRA / WRONG</span><strong id="resExtra" class="text-red">0</strong></div>
+        <div class="res-stat"><span class="label-xs">AVG TIMING ERROR</span><strong id="resTiming">0 ms</strong></div>
+      </div>
+      <div class="modal-actions">
+        <button id="btnResRetry" class="btn btn-primary">Practice Again</button>
+        <button id="btnResLibrary" class="btn btn-secondary">Back to Library</button>
+        <button id="btnResClose" class="btn btn-secondary">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- PASTE ABC MODAL -->
+  <div id="abcModal" class="modal hidden">
+    <div class="modal-card">
+      <h2>Paste ABC Notation</h2>
+      <p class="muted" style="margin:0 0 10px 0;">Paste any ABC tune below to import it directly into your Song Library.</p>
+      <textarea id="abcInput" class="mono" rows="8" style="width:100%;background:#0d1015;color:#f1f5f9;border:1px solid #263040;border-radius:6px;padding:10px;resize:vertical;">T:Mary Had a Little Lamb
+M:4/4
+L:1/4
+Q:104
+K:C
+E D C D | E E E2 | D D D2 | E G G2 |
+E D C D | E E E E | D D E D | C4 |</textarea>
+      <div class="modal-actions" style="margin-top:12px;">
+        <button id="btnAbcImport" class="btn btn-primary">Import &amp; Practice</button>
+        <button id="btnAbcClose" class="btn btn-secondary">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="./src/app.js"></script>
+</body>
+</html>

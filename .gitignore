@@ -1,0 +1,21 @@
+# Native C++ build artifacts
+native/build/
+*.o
+*.d
+*.so
+*.dll
+*.dylib
+
+# Flutter / Dart build artifacts
+app/.dart_tool/
+app/.packages
+app/build/
+app/.flutter-plugins
+app/.flutter-plugins-dependencies
+
+# Editor / OS
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*.log
