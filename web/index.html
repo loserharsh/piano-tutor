@@ -23,7 +23,7 @@
       <button class="tab active" data-view="library">Song Library</button>
       <button class="tab" data-view="practice">Practice</button>
       <button class="tab" data-view="calibrate">Calibrate Mic</button>
-      <button class="tab" data-view="tester">Mic Tester</button>
+      <button class="tab" data-view="tester">DSP Debug</button>
       <button class="tab" data-view="settings">Settings</button>
     </nav>
 
@@ -186,12 +186,12 @@
       </div>
     </section>
 
-    <!-- VIEW 4: AUDIO RECOGNITION TESTER (M1/M2 DIAGNOSTICS) -->
+    <!-- VIEW 4: DSP DEBUG & AUDIO RECOGNITION TESTER -->
     <section id="view-tester" class="view">
       <div class="section-header">
         <div>
-          <h1>Audio Recognition Tester</h1>
-          <p class="muted">Live FFT-YIN pitch detection, cents tuning offset, 64-bin spectrum, and melody recorder.</p>
+          <h1>DSP Debug &amp; Pitch Analyzer</h1>
+          <p class="muted">Adaptive 4096/8192-sample YIN + missing-fundamental harmonic analysis, octave alternatives, spectrum, and latency.</p>
         </div>
         <div class="toolbar-group">
           <button id="btnRecMelody" class="btn btn-secondary">Record Melody</button>
@@ -204,13 +204,28 @@
           <div class="label-xs">RECOGNIZED NOTE</div>
           <div id="testNote" class="big-note mono">--</div>
           <div id="testMidi" class="muted mono">MIDI --</div>
+          <div id="testMetaBadges" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px;">
+            <span id="dbgRegister" class="badge">REG --</span>
+            <span id="dbgWindow" class="badge">WIN 4096</span>
+            <span id="dbgPhase" class="badge">SUSTAIN</span>
+          </div>
         </div>
         <div class="tester-metrics">
-          <div class="metric-row"><span>Frequency</span><strong id="testFreq" class="mono">0.00 Hz</strong></div>
+          <div class="metric-row"><span>Actual Detected Frequency (Raw)</span><strong id="testRawFreq" class="mono">0.00 Hz</strong></div>
+          <div class="metric-row"><span>Estimated Fundamental Frequency</span><strong id="testFreq" class="mono" style="color:var(--teal);">0.00 Hz</strong></div>
+          <div class="metric-row"><span>Octave Correction</span><strong id="dbgCorrection" class="mono">none</strong></div>
           <div class="metric-row"><span>Cents Offset</span><strong id="testCents" class="mono">0.0 ¢</strong></div>
-          <div class="metric-row"><span>Confidence</span><strong id="testConf" class="mono">0%</strong></div>
+          <div class="metric-row"><span>Confidence Score</span><strong id="testConf" class="mono">0%</strong></div>
           <div class="progress-track"><div id="testConfBar" class="progress-fill"></div></div>
-          <div class="metric-row"><span>Input RMS / Floor</span><strong id="testRms" class="mono">-100 / -65 dB</strong></div>
+          <div class="metric-row"><span>Detection Latency (Algo / Compute)</span><strong id="dbgLatency" class="mono">0.0 ms / 0.0 ms</strong></div>
+          <div class="metric-row"><span>Input RMS / Noise Floor</span><strong id="testRms" class="mono">-100 / -65 dB</strong></div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:12px;">
+        <div class="label-xs" style="margin-bottom:8px;">CANDIDATE OCTAVE ALTERNATIVES (f/2 · f · 2f)</div>
+        <div id="dbgCandidatesList" class="events-list mono">
+          <div class="muted" style="font-size:12px;">Play a piano note to inspect candidate fundamentals and harmonic structure scores...</div>
         </div>
       </div>
 

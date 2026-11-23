@@ -142,20 +142,43 @@ function handleAudioSnapshot(snap) {
     }
   }
 
-  // Update Mic Tester screen
+  // Update DSP Debug / Mic Tester screen
   if (state.view === 'tester') {
     $('testNote').textContent = snap.noteName;
     $('testMidi').textContent = snap.detectedNotes?.length
       ? `MIDI ${snap.detectedNotes.map((n) => n.midiNote).join(', ')}`
       : 'MIDI --';
+    $('dbgRegister').textContent = `REG ${snap.register || '--'}`;
+    $('dbgWindow').textContent = `WIN ${snap.windowSizeUsed || 4096}`;
+    $('dbgPhase').textContent = snap.isAttackTransient ? 'ATTACK' : 'SUSTAIN';
+    $('testRawFreq').textContent = snap.rawFrequencyHz > 0 ? `${snap.rawFrequencyHz.toFixed(2)} Hz` : '0.00 Hz';
     $('testFreq').textContent = snap.hasPitch ? `${snap.frequencyHz.toFixed(2)} Hz` : '0.00 Hz';
+    $('dbgCorrection').textContent = snap.octaveCorrection || 'none';
     $('testCents').textContent = snap.hasPitch
       ? `${snap.centsOffset >= 0 ? '+' : ''}${snap.centsOffset.toFixed(1)} ¢`
       : '0.0 ¢';
     const pct = Math.round(snap.confidence * 100);
     $('testConf').textContent = `${pct}%`;
     $('testConfBar').style.width = `${pct}%`;
+    $('dbgLatency').textContent = `${(snap.detectionLatencyMs || 0).toFixed(1)} ms / ${(snap.processingMs || 0).toFixed(1)} ms`;
     $('testRms').textContent = `${snap.rmsDb.toFixed(1)} / ${snap.noiseFloorDb.toFixed(1)} dB`;
+
+    // Render candidate octave alternatives (f/2, f, 2f)
+    const candBox = $('dbgCandidatesList');
+    if (snap.octaveCandidates && snap.octaveCandidates.length > 0) {
+      candBox.innerHTML = '';
+      for (const c of snap.octaveCandidates) {
+        const row = document.createElement('div');
+        row.className = 'event-row';
+        if (c.selected) {
+          row.style.border = '1px solid var(--teal)';
+          row.style.color = 'var(--teal)';
+        }
+        row.innerHTML = `<span>${c.selected ? '▶ ' : '  '}<strong>${c.noteName}</strong> (${c.frequencyHz.toFixed(2)} Hz) · ${c.label}</span><span>CMNDF=${c.cmndf.toFixed(3)} · oddH=${c.oddPeakCount} · HScore=${c.harmonicSum.toFixed(3)}</span>`;
+        candBox.appendChild(row);
+      }
+    }
+
     renderSpectrum($('spectrumCanvas'), snap.spectrumBins);
   }
 
