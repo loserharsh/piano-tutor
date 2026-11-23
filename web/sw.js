@@ -1,4 +1,4 @@
-const CACHE_NAME = 'pianotutor-v5';
+const CACHE_NAME = 'pianotutor-v6';
 
 self.addEventListener('install', (event) => {
   event.waitUntil(self.skipWaiting());

@@ -186,12 +186,12 @@
       </div>
     </section>
 
-    <!-- VIEW 4: DSP DEBUG & AUDIO RECOGNITION TESTER -->
+    <!-- VIEW 4: AUDIO RECOGNITION DEBUGGER -->
     <section id="view-tester" class="view">
       <div class="section-header">
         <div>
-          <h1>DSP Debug &amp; Pitch Analyzer</h1>
-          <p class="muted">Adaptive 4096/8192-sample YIN + missing-fundamental harmonic analysis, octave alternatives, spectrum, and latency.</p>
+          <h1>Audio Recognition Debugger</h1>
+          <p class="muted">Real-time fundamental vs harmonic diagnostics, octave-candidate analysis, manual register testing, and audio input controls.</p>
         </div>
         <div class="toolbar-group">
           <button id="btnRecMelody" class="btn btn-secondary">Record Melody</button>
@@ -199,43 +199,118 @@
         </div>
       </div>
 
+      <!-- 1. LIVE DETECTION PANEL -->
       <div class="tester-top card">
         <div class="tester-note-block">
-          <div class="label-xs">RECOGNIZED NOTE</div>
+          <div class="label-xs">CONFIRMED NOTE</div>
           <div id="testNote" class="big-note mono">--</div>
           <div id="testMidi" class="muted mono">MIDI --</div>
           <div id="testMetaBadges" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px;">
+            <span id="dbgStatus" class="badge">Mic Off</span>
             <span id="dbgRegister" class="badge">REG --</span>
             <span id="dbgWindow" class="badge">WIN 4096</span>
-            <span id="dbgPhase" class="badge">SUSTAIN</span>
           </div>
         </div>
         <div class="tester-metrics">
-          <div class="metric-row"><span>Actual Detected Frequency (Raw)</span><strong id="testRawFreq" class="mono">0.00 Hz</strong></div>
-          <div class="metric-row"><span>Estimated Fundamental Frequency</span><strong id="testFreq" class="mono" style="color:var(--teal);">0.00 Hz</strong></div>
+          <div class="metric-row"><span>Detected Frequency (Raw)</span><strong id="testRawFreq" class="mono">0.00 Hz</strong></div>
+          <div class="metric-row"><span>Estimated Fundamental (f0)</span><strong id="testFreq" class="mono" style="color:var(--teal);">0.00 Hz</strong></div>
           <div class="metric-row"><span>Octave Correction</span><strong id="dbgCorrection" class="mono">none</strong></div>
           <div class="metric-row"><span>Cents Offset</span><strong id="testCents" class="mono">0.0 ¢</strong></div>
-          <div class="metric-row"><span>Confidence Score</span><strong id="testConf" class="mono">0%</strong></div>
+          <div class="metric-row"><span>Confidence</span><strong id="testConf" class="mono">0%</strong></div>
           <div class="progress-track"><div id="testConfBar" class="progress-fill"></div></div>
-          <div class="metric-row"><span>Detection Latency (Algo / Compute)</span><strong id="dbgLatency" class="mono">0.0 ms / 0.0 ms</strong></div>
-          <div class="metric-row"><span>Input RMS / Noise Floor</span><strong id="testRms" class="mono">-100 / -65 dB</strong></div>
+          <div class="metric-row"><span>Audio Input Level (RMS / Floor)</span><strong id="testRms" class="mono">-100 / -65 dB</strong></div>
+          <div class="progress-track"><div id="dbgLevelBar" class="progress-fill" style="background:var(--green);"></div></div>
+          <div class="metric-row"><span>Processing / Algo Latency</span><strong id="dbgLatency" class="mono">0.0 ms / 0.0 ms</strong></div>
         </div>
       </div>
 
+      <!-- 2. ANNOTATED FREQUENCY SPECTRUM -->
       <div class="card" style="margin-top:12px;">
-        <div class="label-xs" style="margin-bottom:8px;">CANDIDATE OCTAVE ALTERNATIVES (f/2 · f · 2f)</div>
-        <div id="dbgCandidatesList" class="events-list mono">
-          <div class="muted" style="font-size:12px;">Play a piano note to inspect candidate fundamentals and harmonic structure scores...</div>
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:8px;">
+          <div class="label-xs">REAL-TIME FFT SPECTRUM · <span style="color:var(--teal);">f0 Fundamental</span> · <span style="color:var(--amber);">H2–H5 Harmonics</span> · <span style="color:#f8fafc;">● Spectral Peaks</span></div>
+          <label class="toggle-chip">
+            <input type="checkbox" id="chkLowFreqZoom" />
+            <span>Low-Freq Zoom (20–500 Hz)</span>
+          </label>
+        </div>
+        <canvas id="spectrumCanvas" class="spectrum-canvas" style="height:190px;"></canvas>
+      </div>
+
+      <!-- 3. ACTUAL SPECTRUM PEAKS vs ESTIMATED CANDIDATE PITCHES -->
+      <div class="card-grid" style="margin-top:12px;">
+        <div class="card">
+          <div class="label-xs" style="margin-bottom:8px;">ACTUAL SPECTRUM PEAKS (FFT)</div>
+          <div id="dbgPeaksList" class="events-list mono">
+            <div class="muted" style="font-size:12px;">Play a note to inspect live FFT spectral peaks (Hz &amp; dB)...</div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="label-xs" style="margin-bottom:8px;">ESTIMATED CANDIDATE PITCHES (UNCONFIRMED VS CONFIRMED)</div>
+          <div id="dbgCandidatesList" class="events-list mono">
+            <div class="muted" style="font-size:12px;">Candidate octave alternatives (f/2, f, 2f) appear here...</div>
+          </div>
         </div>
       </div>
 
-      <div class="card" style="margin-top:12px;">
-        <div class="label-xs" style="margin-bottom:6px;">REAL-TIME LOG-FREQUENCY SPECTRUM (27.5 Hz A0 – 4500 Hz C8)</div>
-        <canvas id="spectrumCanvas" class="spectrum-canvas"></canvas>
+      <!-- 4. MANUAL REGISTER TESTING MODE & 5. AUDIO CONTROLS -->
+      <div class="card-grid" style="margin-top:12px;">
+        <div class="card">
+          <div class="label-xs" style="margin-bottom:8px;">MANUAL REGISTER TESTING MODE</div>
+          <div class="toolbar-group" style="margin-bottom:10px;">
+            <select id="selTestRegister" class="select">
+              <option value="continuous">Continuous Free Detection</option>
+              <option value="low">Low Register (A0–B2)</option>
+              <option value="mid">Middle Register (C3–B5)</option>
+              <option value="high">High Register (C6–C8)</option>
+            </select>
+            <select id="selTestTargetNote" class="select" disabled></select>
+            <button id="btnTestNextNote" class="btn btn-secondary" disabled>Next Key</button>
+            <button id="btnTestReset" class="btn btn-secondary">Reset</button>
+          </div>
+          <div id="dbgTestPrompt" class="verify-box" style="margin-bottom:10px;">
+            Continuous mode: play any key to inspect live recognition and octave behavior.
+          </div>
+          <div class="mono" style="display:grid;grid-template-columns:repeat(2,1fr);gap:6px;font-size:12px;">
+            <span>Low Reg: <strong id="statLow">--</strong></span>
+            <span>Mid Reg: <strong id="statMid">--</strong></span>
+            <span>High Reg: <strong id="statHigh">--</strong></span>
+            <span>Octave Errors: <strong id="statOctErr" class="text-red">0</strong></span>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="label-xs" style="margin-bottom:8px;">AUDIO INPUT CONTROLS</div>
+          <div class="toolbar-group" style="margin-bottom:10px;">
+            <select id="selAudioSourceType" class="select" title="Audio Source Preset">
+              <option value="mic">Microphone (Acoustic)</option>
+              <option value="interface">Wired Audio Interface / Line-In</option>
+            </select>
+            <select id="selAudioDevice" class="select" style="max-width:210px;">
+              <option value="default">System Default Input</option>
+            </select>
+            <button id="btnRefreshDevices" class="btn btn-secondary">Refresh</button>
+          </div>
+          <label class="slider-label full">
+            Input Gain / Sensitivity: <strong id="dbgGainVal" class="mono">1.0x (0.0 dB)</strong>
+            <input type="range" id="dbgGain" min="0.2" max="4.0" step="0.1" value="1.0" />
+          </label>
+          <label class="slider-label full">
+            Noise Threshold: <strong id="dbgNoiseVal" class="mono">-50 dBFS</strong>
+            <input type="range" id="dbgNoise" min="-70" max="-20" step="1" value="-50" />
+          </label>
+          <label class="slider-label full" style="margin-bottom:0;">
+            Confidence Threshold: <strong id="dbgConfThreshVal" class="mono">60%</strong>
+            <input type="range" id="dbgConfThresh" min="40" max="95" step="5" value="60" />
+          </label>
+        </div>
       </div>
 
+      <!-- 6. DETECTION HISTORY (LAST 20 NOTES) -->
       <div class="card" style="margin-top:12px;">
-        <div class="label-xs" id="testEventsTitle" style="margin-bottom:6px;">DETECTED NOTE EVENTS</div>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+          <div class="label-xs" id="testEventsTitle">DETECTION HISTORY (LAST 20 CONFIRMED NOTES)</div>
+          <button id="btnClearHistory" class="btn btn-secondary" style="padding:3px 10px;font-size:11px;">Clear</button>
+        </div>
         <div id="testEventsList" class="events-list mono"></div>
       </div>
     </section>

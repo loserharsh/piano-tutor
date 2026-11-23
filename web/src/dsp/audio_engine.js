@@ -52,6 +52,7 @@ export class AudioPipeline {
     this.magSpecLong = new Float32Array((this.config.longFrameSize >> 1) + 1);
     this.prevMagFast = null;
     this.spectrumBins = new Float32Array(64);
+    this.lowSpectrumBins = new Float32Array(64); // Linear 20..500 Hz zoom bins for bass inspection
     this.pendingBuffer = new Float32Array(this.config.hopSize);
     this.pendingFill = 0;
     this.samplesAccumulated = 0;
@@ -82,6 +83,7 @@ export class AudioPipeline {
   _emptySnapshot() {
     return {
       mode: this.config?.mode || 'monophonic',
+      status: 'Idle',
       hasPitch: false,
       rawFrequencyHz: 0,
       frequencyHz: 0,
@@ -94,6 +96,7 @@ export class AudioPipeline {
       octaveCorrection: 'none',
       isAttackTransient: false,
       octaveCandidates: [],
+      spectrumPeaks: [],
       detectedNotes: [],
       rmsDb: -100,
       noiseFloorDb: -65,
@@ -105,6 +108,7 @@ export class AudioPipeline {
       detectionLatencyMs: 0,
       timestampSec: 0,
       spectrumBins: new Float32Array(64),
+      lowSpectrumBins: new Float32Array(64),
     };
   }
 
@@ -361,11 +365,21 @@ export class AudioPipeline {
       events = res.events;
     }
 
-    this._computeLogSpectrum(windowSizeUsed === longSize ? this.magSpecLong : this.magSpecFast, windowSizeUsed);
+    const activeMag = windowSizeUsed === longSize ? this.magSpecLong : this.magSpecFast;
+    this._computeLogSpectrum(activeMag, windowSizeUsed);
+    const spectrumPeaks = rmsDb >= effectiveGate
+      ? this._extractSpectralPeaks(activeMag, windowSizeUsed, 6)
+      : [];
 
     const processingMs = typeof performance !== 'undefined' ? (performance.now() - t0) : 0;
-    // Effective algorithmic latency = half analysis window + hop step + compute time
     const detectionLatencyMs = ((windowSizeUsed * 0.5 + this.config.hopSize) / this.config.sampleRate) * 1000 + processingMs;
+
+    let status = 'Listening';
+    if (rmsDb < effectiveGate) status = 'Below Noise Gate';
+    else if (isAttackTransient) status = 'Attack Transient';
+    else if (activeNotesMidi.length > 0) status = 'Confirmed Note';
+    else if (primary) status = 'Estimating...';
+    else status = 'Unvoiced / Low Confidence';
 
     const chordLabel = detectedNotes.length > 0
       ? detectedNotes.map((n) => n.noteName).join(' + ')
@@ -373,6 +387,7 @@ export class AudioPipeline {
 
     this.latestSnapshot = {
       mode: this.config.mode,
+      status,
       hasPitch: primary !== null,
       rawFrequencyHz,
       frequencyHz: primary ? primary.frequencyHz : 0,
@@ -385,6 +400,7 @@ export class AudioPipeline {
       octaveCorrection,
       isAttackTransient,
       octaveCandidates,
+      spectrumPeaks,
       detectedNotes,
       rmsDb,
       noiseFloorDb: this.noiseFloorDb,
@@ -396,6 +412,7 @@ export class AudioPipeline {
       detectionLatencyMs,
       timestampSec,
       spectrumBins: this.spectrumBins,
+      lowSpectrumBins: this.lowSpectrumBins,
     };
 
     for (const evt of events) {
@@ -422,6 +439,38 @@ export class AudioPipeline {
     if (this.onSnapshot) this.onSnapshot(this.latestSnapshot);
   }
 
+  _extractSpectralPeaks(magSpec, fftSize, maxPeaks = 6) {
+    const binHz = this.config.sampleRate / fftSize;
+    const minBin = Math.max(2, Math.floor(24 / binHz));
+    const maxBin = Math.min(magSpec.length - 2, Math.ceil(4500 / binHz));
+
+    let maxMag = 0;
+    for (let b = minBin; b <= maxBin; b++) if (magSpec[b] > maxMag) maxMag = magSpec[b];
+    if (maxMag < 1e-5) return [];
+
+    const floor = maxMag * 0.08;
+    const peaks = [];
+    for (let b = minBin; b <= maxBin; b++) {
+      const v = magSpec[b];
+      if (v > floor && v > magSpec[b - 1] && v >= magSpec[b + 1]) {
+        // Parabolic bin interpolation for accurate peak Hz
+        const y0 = magSpec[b - 1];
+        const y1 = v;
+        const y2 = magSpec[b + 1];
+        const denom = 2 * (y0 - 2 * y1 + y2);
+        const delta = Math.abs(denom) > 1e-9 ? Math.max(-0.5, Math.min(0.5, (y0 - y2) / denom)) : 0;
+        const hz = (b + delta) * binHz;
+        peaks.push({
+          frequencyHz: hz,
+          magnitude: v,
+          magnitudeDb: 20 * Math.log10(Math.max(1e-7, v)),
+        });
+      }
+    }
+    peaks.sort((a, b) => b.magnitude - a.magnitude);
+    return peaks.slice(0, maxPeaks).sort((a, b) => a.frequencyHz - b.frequencyHz);
+  }
+
   _computeLogSpectrum(magSpec, fftSize) {
     const binHz = this.config.sampleRate / fftSize;
     const maxBin = magSpec.length - 1;
@@ -439,11 +488,26 @@ export class AudioPipeline {
       const db = peak > 1e-7 ? 20 * Math.log10(peak) : -140;
       this.spectrumBins[i] = Math.max(0, Math.min(1, (db + 75) / 65));
     }
+
+    // Also compute linear 20..500 Hz zoom bins for low-frequency bass inspection
+    const lowMin = 20.0;
+    const lowMax = 500.0;
+    const step = (lowMax - lowMin) / 64;
+    for (let i = 0; i < 64; i++) {
+      const f0 = lowMin + i * step;
+      const f1 = f0 + step;
+      const b0 = Math.max(1, Math.min(maxBin, Math.floor(f0 / binHz)));
+      const b1 = Math.max(b0, Math.min(maxBin, Math.ceil(f1 / binHz)));
+      let peak = 0;
+      for (let b = b0; b <= b1; b++) if (magSpec[b] > peak) peak = magSpec[b];
+      const db = peak > 1e-7 ? 20 * Math.log10(peak) : -140;
+      this.lowSpectrumBins[i] = Math.max(0, Math.min(1, (db + 75) / 65));
+    }
   }
 }
 
 /**
- * Browser Web Audio API microphone capture manager (NO MIDI hardware).
+ * Browser Web Audio API microphone / wired audio interface capture manager (NO MIDI hardware).
  * Disables browser AEC/NS/AGC so natural piano fundamentals and harmonics remain intact.
  */
 export class WebMicrophoneCapture {
@@ -451,9 +515,29 @@ export class WebMicrophoneCapture {
     this.audioCtx = null;
     this.stream = null;
     this.sourceNode = null;
+    this.gainNode = null;
     this.processorNode = null;
     this.pipeline = null;
     this.isRunning = false;
+    this.inputGain = 1.0;
+  }
+
+  static async listInputDevices() {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return [];
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    return devices
+      .filter((d) => d.kind === 'audioinput')
+      .map((d, idx) => ({
+        deviceId: d.deviceId,
+        label: d.label || `Audio Input ${idx + 1}`,
+      }));
+  }
+
+  setInputGain(gain) {
+    this.inputGain = Math.max(0.2, Math.min(4.0, gain));
+    if (this.gainNode && this.audioCtx) {
+      this.gainNode.gain.setTargetAtTime(this.inputGain, this.audioCtx.currentTime, 0.015);
+    }
   }
 
   async start(options = {}) {
@@ -462,24 +546,29 @@ export class WebMicrophoneCapture {
       throw new Error('Microphone API unavailable. Use localhost or HTTPS in a modern browser.');
     }
 
+    const audioConstraints = {
+      channelCount: 1,
+      echoCancellation: false,
+      noiseSuppression: false,
+      autoGainControl: false,
+    };
+    if (options.deviceId && options.deviceId !== 'default') {
+      audioConstraints.deviceId = { exact: options.deviceId };
+    }
+
     try {
       this.stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          channelCount: 1,
-          echoCancellation: false,
-          noiseSuppression: false,
-          autoGainControl: false,
-        },
+        audio: audioConstraints,
         video: false,
       });
     } catch (err) {
       if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
         throw new Error('Microphone permission denied. Please allow microphone access to listen to your piano.');
       }
-      if (err.name === 'NotFoundError') {
-        throw new Error('No microphone detected on this device.');
+      if (err.name === 'NotFoundError' || err.name === 'OverconstrainedError') {
+        throw new Error('Selected audio input device not found. Try System Default.');
       }
-      throw new Error(`Microphone error: ${err.message || err.name}`);
+      throw new Error(`Audio input error: ${err.message || err.name}`);
     }
 
     const AudioCtx = window.AudioContext || window.webkitAudioContext;
@@ -493,14 +582,19 @@ export class WebMicrophoneCapture {
       sampleRate: this.audioCtx.sampleRate,
       frameSize: 4096,
       longFrameSize: 8192,
-      hopSize: 1024, // ~21 ms @ 48 kHz: responsive without saturating mobile main thread
+      hopSize: 1024,
       noiseGateDb: options.noiseGateDb ?? -50.0,
+      minConfidence: options.minConfidence ?? 0.60,
       a4ReferenceHz: options.a4ReferenceHz ?? 440.0,
     });
     this.pipeline.onNoteEvent = options.onNoteEvent || null;
     this.pipeline.onSnapshot = options.onSnapshot || null;
 
     this.sourceNode = this.audioCtx.createMediaStreamSource(this.stream);
+    this.gainNode = this.audioCtx.createGain();
+    this.inputGain = options.inputGain ?? this.inputGain;
+    this.gainNode.gain.value = this.inputGain;
+
     this.processorNode = this.audioCtx.createScriptProcessor(2048, 1, 1);
     this.processorNode.onaudioprocess = (ev) => {
       if (!this.isRunning || !this.pipeline) return;
@@ -511,7 +605,8 @@ export class WebMicrophoneCapture {
     const muteGain = this.audioCtx.createGain();
     muteGain.gain.value = 0;
 
-    this.sourceNode.connect(this.processorNode);
+    this.sourceNode.connect(this.gainNode);
+    this.gainNode.connect(this.processorNode);
     this.processorNode.connect(muteGain);
     muteGain.connect(this.audioCtx.destination);
 
@@ -525,6 +620,10 @@ export class WebMicrophoneCapture {
       this.processorNode.disconnect();
       this.processorNode.onaudioprocess = null;
       this.processorNode = null;
+    }
+    if (this.gainNode) {
+      this.gainNode.disconnect();
+      this.gainNode = null;
     }
     if (this.sourceNode) {
       this.sourceNode.disconnect();

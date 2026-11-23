@@ -34,6 +34,10 @@ const state = {
   // Persisted settings
   recognitionMode: savedSettings.recognitionMode,
   noiseGateDb: savedSettings.noiseGateDb,
+  minConfidence: savedSettings.minConfidence ?? 0.60,
+  inputGain: savedSettings.inputGain ?? 1.0,
+  audioDeviceId: 'default',
+  audioSourceType: 'mic',
   timingToleranceMs: savedSettings.timingToleranceMs,
   latencyMs: savedSettings.latencyMs,
   a4ReferenceHz: savedSettings.a4ReferenceHz,
@@ -54,6 +58,17 @@ const state = {
   waitingForMidis: [],
   soundEnabled: false,
   soundedNotes: new Set(),
+
+  // Debugger state
+  lowFreqZoom: false,
+  testMode: 'continuous', // 'continuous' | 'low' | 'mid' | 'high'
+  testTargetMidi: 36,     // User-selected target key in manual testing mode
+  testStats: {
+    low: { total: 0, exact: 0 },
+    mid: { total: 0, exact: 0 },
+    high: { total: 0, exact: 0 },
+    octaveErrors: 0,
+  },
 
   // Live mic feedback flashes on keyboard
   flashKeys: new Map(), // midi -> { state: 'correct'|'wrong', untilMs }
@@ -89,6 +104,25 @@ function switchView(viewName) {
 
 // ---------------- Microphone Lifecycle ----------------
 
+async function refreshAudioDevices() {
+  const sel = $('selAudioDevice');
+  if (!sel) return;
+  try {
+    const devices = await WebMicrophoneCapture.listInputDevices();
+    const prev = state.audioDeviceId;
+    sel.innerHTML = '<option value="default">System Default Input</option>';
+    for (const d of devices) {
+      if (!d.deviceId || d.deviceId === 'default') continue;
+      sel.add(new Option(d.label, d.deviceId));
+    }
+    if ([...sel.options].some((o) => o.value === prev)) {
+      sel.value = prev;
+    }
+  } catch {
+    // Ignore enumerateDevices errors prior to permission
+  }
+}
+
 async function toggleMic() {
   showError('');
   if (mic.isRunning) {
@@ -96,13 +130,17 @@ async function toggleMic() {
     $('micDot').classList.remove('on');
     $('micStatusText').textContent = 'Mic Off';
     $('globalMicBtn').textContent = 'Enable Mic';
+    if ($('dbgStatus')) $('dbgStatus').textContent = 'Mic Off';
     return;
   }
 
   try {
     const pipeline = await mic.start({
       mode: state.recognitionMode,
+      deviceId: state.audioDeviceId,
+      inputGain: state.inputGain,
       noiseGateDb: state.noiseGateDb,
+      minConfidence: state.minConfidence,
       a4ReferenceHz: state.a4ReferenceHz,
       onSnapshot: handleAudioSnapshot,
       onNoteEvent: handleAudioNoteEvent,
@@ -110,6 +148,7 @@ async function toggleMic() {
     $('micDot').classList.add('on');
     $('micStatusText').textContent = `${pipeline.config.sampleRate} Hz`;
     $('globalMicBtn').textContent = 'Disable Mic';
+    await refreshAudioDevices();
   } catch (err) {
     showError(err.message);
   }
@@ -142,15 +181,18 @@ function handleAudioSnapshot(snap) {
     }
   }
 
-  // Update DSP Debug / Mic Tester screen
+  // Update Audio Recognition Debugger screen
   if (state.view === 'tester') {
-    $('testNote').textContent = snap.noteName;
-    $('testMidi').textContent = snap.detectedNotes?.length
-      ? `MIDI ${snap.detectedNotes.map((n) => n.midiNote).join(', ')}`
-      : 'MIDI --';
+    const confirmedLabel = snap.activeNotesMidi?.length
+      ? snap.activeNotesMidi.map((m) => midiToNoteName(m)).join(' + ')
+      : '--';
+    $('testNote').textContent = confirmedLabel;
+    $('testMidi').textContent = snap.activeNotesMidi?.length
+      ? `MIDI ${snap.activeNotesMidi.join(', ')}`
+      : (snap.hasPitch ? `Est: ${snap.noteName} (unconfirmed)` : 'MIDI --');
+    $('dbgStatus').textContent = snap.status || 'Listening';
     $('dbgRegister').textContent = `REG ${snap.register || '--'}`;
     $('dbgWindow').textContent = `WIN ${snap.windowSizeUsed || 4096}`;
-    $('dbgPhase').textContent = snap.isAttackTransient ? 'ATTACK' : 'SUSTAIN';
     $('testRawFreq').textContent = snap.rawFrequencyHz > 0 ? `${snap.rawFrequencyHz.toFixed(2)} Hz` : '0.00 Hz';
     $('testFreq').textContent = snap.hasPitch ? `${snap.frequencyHz.toFixed(2)} Hz` : '0.00 Hz';
     $('dbgCorrection').textContent = snap.octaveCorrection || 'none';
@@ -160,10 +202,25 @@ function handleAudioSnapshot(snap) {
     const pct = Math.round(snap.confidence * 100);
     $('testConf').textContent = `${pct}%`;
     $('testConfBar').style.width = `${pct}%`;
-    $('dbgLatency').textContent = `${(snap.detectionLatencyMs || 0).toFixed(1)} ms / ${(snap.processingMs || 0).toFixed(1)} ms`;
+
+    const levelPct = Math.max(0, Math.min(100, ((snap.rmsDb + 75) / 65) * 100));
+    $('dbgLevelBar').style.width = `${levelPct.toFixed(0)}%`;
+    $('dbgLatency').textContent = `${(snap.processingMs || 0).toFixed(2)} ms / ${(snap.detectionLatencyMs || 0).toFixed(1)} ms`;
     $('testRms').textContent = `${snap.rmsDb.toFixed(1)} / ${snap.noiseFloorDb.toFixed(1)} dB`;
 
-    // Render candidate octave alternatives (f/2, f, 2f)
+    // Actual FFT spectral peaks
+    const peaksBox = $('dbgPeaksList');
+    if (snap.spectrumPeaks && snap.spectrumPeaks.length > 0) {
+      peaksBox.innerHTML = '';
+      for (const p of snap.spectrumPeaks) {
+        const row = document.createElement('div');
+        row.className = 'event-row';
+        row.innerHTML = `<span><strong>${p.frequencyHz.toFixed(2)} Hz</strong></span><span>${p.magnitudeDb.toFixed(1)} dB</span>`;
+        peaksBox.appendChild(row);
+      }
+    }
+
+    // Estimated candidate pitches (clearly separated from Confirmed Note)
     const candBox = $('dbgCandidatesList');
     if (snap.octaveCandidates && snap.octaveCandidates.length > 0) {
       candBox.innerHTML = '';
@@ -174,12 +231,18 @@ function handleAudioSnapshot(snap) {
           row.style.border = '1px solid var(--teal)';
           row.style.color = 'var(--teal)';
         }
-        row.innerHTML = `<span>${c.selected ? '▶ ' : '  '}<strong>${c.noteName}</strong> (${c.frequencyHz.toFixed(2)} Hz) · ${c.label}</span><span>CMNDF=${c.cmndf.toFixed(3)} · oddH=${c.oddPeakCount} · HScore=${c.harmonicSum.toFixed(3)}</span>`;
+        const badge = c.selected ? 'SELECTED' : 'CANDIDATE';
+        row.innerHTML = `<span><strong>${c.noteName}</strong>: ${c.frequencyHz.toFixed(2)} Hz · ${c.label}</span><span>[${badge}] CMNDF=${c.cmndf.toFixed(2)} · oddH=${c.oddPeakCount}</span>`;
         candBox.appendChild(row);
       }
     }
 
-    renderSpectrum($('spectrumCanvas'), snap.spectrumBins);
+    renderSpectrum($('spectrumCanvas'), {
+      bins: state.lowFreqZoom ? snap.lowSpectrumBins : snap.spectrumBins,
+      lowZoom: state.lowFreqZoom,
+      fundamentalHz: snap.hasPitch ? snap.frequencyHz : 0,
+      peaks: snap.spectrumPeaks || [],
+    });
   }
 
   // Practice HUD live heard note(s)
@@ -191,17 +254,24 @@ function handleAudioSnapshot(snap) {
 function handleAudioNoteEvent(evt) {
   if (evt.type !== 'noteOn') return;
   const noteName = midiToNoteName(evt.midiNote);
+  const octave = Math.floor(evt.midiNote / 12) - 1;
+  const reg = evt.midiNote < 48 ? 'LOW' : (evt.midiNote < 84 ? 'MID' : 'HIGH');
 
   state.recentEvents.unshift({
     noteName,
     midi: evt.midiNote,
+    octave,
+    reg,
     hz: evt.frequencyHz,
     conf: evt.confidence,
     time: evt.timestampSec,
+    correction: state.latestSnapshot?.octaveCorrection || 'none',
   });
-  if (state.recentEvents.length > 25) state.recentEvents.pop();
-  if (state.view === 'tester' && state.recordedNotes.length === 0) {
-    renderTesterEvents();
+  if (state.recentEvents.length > 20) state.recentEvents.pop();
+
+  if (state.view === 'tester') {
+    if (state.recordedNotes.length === 0) renderTesterEvents();
+    handleManualRegisterTestNote(evt.midiNote, evt.frequencyHz);
   }
 
   // Milestone 4 & 5 Real-Time Tutor Grading (Monophonic + Polyphonic Chords)
@@ -216,7 +286,7 @@ function handleAudioNoteEvent(evt) {
       if (state.waitMode && fb.type === 'correct') {
         state.waitingForMidis = state.tutor.waitingChordIndices.map((idx) => state.filteredNotes[idx].midiPitch);
         if (state.waitingForMidis.length === 0) {
-          state.currentTimeSec += 0.04; // advance past satisfied chord
+          state.currentTimeSec += 0.04;
         }
       }
       updateHudMetrics();
@@ -246,6 +316,8 @@ function saveCurrentSettings() {
   store.saveSettings({
     recognitionMode: state.recognitionMode,
     noiseGateDb: state.noiseGateDb,
+    minConfidence: state.minConfidence,
+    inputGain: state.inputGain,
     timingToleranceMs: state.timingToleranceMs,
     latencyMs: state.latencyMs,
     a4ReferenceHz: state.a4ReferenceHz,
@@ -557,7 +629,73 @@ function animationLoop(nowMs) {
   });
 }
 
-// ---------------- Tester & Calibration Helpers ----------------
+// ---------------- Tester, Manual Register Testing & Calibration Helpers ----------------
+
+const REGISTER_TEST_KEYS = {
+  low: [21, 24, 28, 31, 33, 36, 40, 43, 45, 47],      // A0 .. B2
+  mid: [48, 52, 55, 57, 60, 64, 67, 69, 72, 76, 79, 83], // C3 .. B5
+  high: [84, 88, 91, 93, 96, 100, 103, 105, 108],     // C6 .. C8
+};
+
+function populateTestRegisterKeys(mode) {
+  const sel = $('selTestTargetNote');
+  const nextBtn = $('btnTestNextNote');
+  const prompt = $('dbgTestPrompt');
+  state.testMode = mode;
+
+  if (mode === 'continuous') {
+    sel.innerHTML = '';
+    sel.disabled = true;
+    nextBtn.disabled = true;
+    prompt.textContent = 'Continuous mode: play any key to inspect live recognition and octave behavior.';
+    prompt.classList.remove('ok');
+    return;
+  }
+
+  const keys = REGISTER_TEST_KEYS[mode] || REGISTER_TEST_KEYS.low;
+  sel.innerHTML = '';
+  for (const m of keys) {
+    sel.add(new Option(`${midiToNoteName(m)} (MIDI ${m})`, String(m)));
+  }
+  sel.disabled = false;
+  nextBtn.disabled = false;
+  state.testTargetMidi = keys[0];
+  sel.value = String(state.testTargetMidi);
+  prompt.textContent = `Strike ${midiToNoteName(state.testTargetMidi)} on your piano...`;
+  prompt.classList.remove('ok');
+}
+
+function updateManualTestStatsUi() {
+  const fmt = (s) => (s.total > 0 ? `${s.exact}/${s.total} (${Math.round((s.exact / s.total) * 100)}%)` : '--');
+  $('statLow').textContent = fmt(state.testStats.low);
+  $('statMid').textContent = fmt(state.testStats.mid);
+  $('statHigh').textContent = fmt(state.testStats.high);
+  $('statOctErr').textContent = String(state.testStats.octaveErrors);
+}
+
+function handleManualRegisterTestNote(detectedMidi, detectedHz) {
+  if (state.testMode === 'continuous') return;
+  const target = state.testTargetMidi;
+  const bucket = state.testStats[state.testMode];
+  const prompt = $('dbgTestPrompt');
+  bucket.total++;
+
+  if (detectedMidi === target) {
+    bucket.exact++;
+    prompt.textContent = `EXACT MATCH: ${midiToNoteName(detectedMidi)} (${detectedHz.toFixed(1)} Hz)`;
+    prompt.classList.add('ok');
+  } else if (Math.abs(detectedMidi - target) % 12 === 0) {
+    state.testStats.octaveErrors++;
+    const diffOct = (detectedMidi - target) / 12;
+    const dir = diffOct > 0 ? `+${diffOct} octave (harmonic error)` : `${diffOct} octave (sub-octave)`;
+    prompt.textContent = `OCTAVE ERROR: Expected ${midiToNoteName(target)}, detected ${midiToNoteName(detectedMidi)} (${dir})`;
+    prompt.classList.remove('ok');
+  } else {
+    prompt.textContent = `MISMATCH: Expected ${midiToNoteName(target)}, detected ${midiToNoteName(detectedMidi)} (${detectedHz.toFixed(1)} Hz)`;
+    prompt.classList.remove('ok');
+  }
+  updateManualTestStatsUi();
+}
 
 function renderTesterEvents() {
   const list = $('testEventsList');
@@ -566,17 +704,19 @@ function renderTesterEvents() {
     $('testEventsTitle').textContent = `RECORDED MELODY (${state.recordedNotes.length} NOTES)`;
     for (let i = 0; i < state.recordedNotes.length; i++) {
       const r = state.recordedNotes[i];
+      const oct = Math.floor(r.midiNote / 12) - 1;
       const row = document.createElement('div');
       row.className = 'event-row';
-      row.innerHTML = `<span>#${i + 1} <strong>${r.noteName}</strong> (${r.frequencyHz.toFixed(1)} Hz)</span><span>start ${r.startSec.toFixed(2)}s · dur ${r.durationSec.toFixed(2)}s</span>`;
+      row.innerHTML = `<span>#${i + 1} <strong>${r.noteName}</strong> · Oct ${oct} (${r.frequencyHz.toFixed(1)} Hz)</span><span>start ${r.startSec.toFixed(2)}s · dur ${r.durationSec.toFixed(2)}s</span>`;
       list.appendChild(row);
     }
   } else {
-    $('testEventsTitle').textContent = 'DETECTED NOTE EVENTS';
+    $('testEventsTitle').textContent = `DETECTION HISTORY (LAST ${state.recentEvents.length} / 20 CONFIRMED NOTES)`;
     for (const e of state.recentEvents) {
+      const corr = e.correction && e.correction !== 'none' ? ` · [${e.correction}]` : '';
       const row = document.createElement('div');
       row.className = 'event-row';
-      row.innerHTML = `<span><strong>${e.noteName}</strong> (${e.hz.toFixed(1)} Hz)</span><span>t=${e.time.toFixed(2)}s · ${Math.round(e.conf * 100)}%</span>`;
+      row.innerHTML = `<span><strong>${e.noteName}</strong> · Oct ${e.octave} (${e.reg}) · ${e.hz.toFixed(2)} Hz${corr}</span><span>t=${e.time.toFixed(2)}s · ${Math.round(e.conf * 100)}%</span>`;
       list.appendChild(row);
     }
   }
@@ -757,6 +897,89 @@ function wireEvents() {
     saveCurrentSettings();
   });
 
+  // Audio Recognition Debugger controls
+  $('chkLowFreqZoom').addEventListener('change', (e) => {
+    state.lowFreqZoom = e.target.checked;
+  });
+
+  $('selTestRegister').addEventListener('change', (e) => {
+    populateTestRegisterKeys(e.target.value);
+  });
+  $('selTestTargetNote').addEventListener('change', (e) => {
+    state.testTargetMidi = Number(e.target.value);
+    $('dbgTestPrompt').textContent = `Strike ${midiToNoteName(state.testTargetMidi)} on your piano...`;
+    $('dbgTestPrompt').classList.remove('ok');
+  });
+  $('btnTestNextNote').addEventListener('click', () => {
+    const sel = $('selTestTargetNote');
+    if (sel.options.length === 0) return;
+    sel.selectedIndex = (sel.selectedIndex + 1) % sel.options.length;
+    state.testTargetMidi = Number(sel.value);
+    $('dbgTestPrompt').textContent = `Strike ${midiToNoteName(state.testTargetMidi)} on your piano...`;
+    $('dbgTestPrompt').classList.remove('ok');
+  });
+  $('btnTestReset').addEventListener('click', () => {
+    state.testStats = {
+      low: { total: 0, exact: 0 },
+      mid: { total: 0, exact: 0 },
+      high: { total: 0, exact: 0 },
+      octaveErrors: 0,
+    };
+    updateManualTestStatsUi();
+  });
+
+  $('selAudioSourceType').addEventListener('change', (e) => {
+    state.audioSourceType = e.target.value;
+    if (state.audioSourceType === 'interface') {
+      state.noiseGateDb = -60;
+      state.inputGain = 1.0;
+    } else {
+      state.noiseGateDb = -50;
+      state.inputGain = 1.2;
+    }
+    mic.setInputGain(state.inputGain);
+    if (mic.pipeline) mic.pipeline.config.noiseGateDb = state.noiseGateDb;
+    hydrateSettingsUi();
+    saveCurrentSettings();
+  });
+
+  $('selAudioDevice').addEventListener('change', async (e) => {
+    state.audioDeviceId = e.target.value;
+    if (mic.isRunning) {
+      await toggleMic();
+      await toggleMic();
+    }
+  });
+  $('btnRefreshDevices').addEventListener('click', refreshAudioDevices);
+
+  $('dbgGain').addEventListener('input', (e) => {
+    state.inputGain = Number(e.target.value);
+    const db = (20 * Math.log10(state.inputGain)).toFixed(1);
+    $('dbgGainVal').textContent = `${state.inputGain.toFixed(1)}x (${db >= 0 ? '+' : ''}${db} dB)`;
+    mic.setInputGain(state.inputGain);
+    saveCurrentSettings();
+  });
+  $('dbgNoise').addEventListener('input', (e) => {
+    state.noiseGateDb = Number(e.target.value);
+    $('dbgNoiseVal').textContent = `${state.noiseGateDb} dBFS`;
+    $('setGate').value = String(state.noiseGateDb);
+    $('setGateVal').textContent = `${state.noiseGateDb} dBFS`;
+    if (mic.pipeline) mic.pipeline.config.noiseGateDb = state.noiseGateDb;
+    saveCurrentSettings();
+  });
+  $('dbgConfThresh').addEventListener('input', (e) => {
+    const pct = Number(e.target.value);
+    state.minConfidence = pct / 100;
+    $('dbgConfThreshVal').textContent = `${pct}%`;
+    if (mic.pipeline) mic.pipeline.config.minConfidence = state.minConfidence;
+    saveCurrentSettings();
+  });
+  $('btnClearHistory').addEventListener('click', () => {
+    state.recentEvents = [];
+    state.recordedNotes = [];
+    renderTesterEvents();
+  });
+
   // Mic Tester Recorder
   $('btnRecMelody').addEventListener('click', async () => {
     if (!mic.isRunning) await toggleMic();
@@ -791,6 +1014,14 @@ function hydrateSettingsUi() {
   $('selRecognitionMode').value = state.recognitionMode;
   $('setGate').value = String(state.noiseGateDb);
   $('setGateVal').textContent = `${state.noiseGateDb} dBFS`;
+  $('dbgNoise').value = String(state.noiseGateDb);
+  $('dbgNoiseVal').textContent = `${state.noiseGateDb} dBFS`;
+  $('dbgGain').value = String(state.inputGain);
+  const gainDb = (20 * Math.log10(state.inputGain)).toFixed(1);
+  $('dbgGainVal').textContent = `${state.inputGain.toFixed(1)}x (${gainDb >= 0 ? '+' : ''}${gainDb} dB)`;
+  const confPct = Math.round(state.minConfidence * 100);
+  $('dbgConfThresh').value = String(confPct);
+  $('dbgConfThreshVal').textContent = `${confPct}%`;
   $('setTol').value = String(state.timingToleranceMs);
   $('setTolVal').textContent = `±${state.timingToleranceMs} ms`;
   $('setLat').value = String(state.latencyMs);
@@ -809,6 +1040,7 @@ if ('serviceWorker' in navigator) {
 // Init (wire events first so UI buttons are always responsive)
 wireEvents();
 hydrateSettingsUi();
+refreshAudioDevices();
 renderSongLibrary();
 loadSongIntoPractice(state.songs[0]);
 requestAnimationFrame(animationLoop);
