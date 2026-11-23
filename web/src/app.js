@@ -10,9 +10,12 @@ import { PianoPreviewSynth } from './audio/synth_preview.js';
 import { renderFallingNotes } from './ui/falling_notes.js';
 import { renderPianoKeyboard } from './ui/piano_keyboard.js';
 import { renderSpectrum } from './ui/spectrum_canvas.js';
+import { CalibrationStore } from './calibration/calibration_store.js';
+import { PianoCalibrationWizard } from './calibration/calibration_wizard.js';
 
 const mic = new WebMicrophoneCapture();
 const store = new ProgressStore();
+const calStore = new CalibrationStore();
 const previewSynth = new PianoPreviewSynth();
 
 const savedSettings = store.loadSettings({
@@ -92,6 +95,29 @@ function showError(msg) {
   }
 }
 
+function applyCalibrationToPipeline(profile) {
+  if (!mic.pipeline) return;
+  if (!profile) {
+    mic.pipeline.setCalibration(null);
+    return;
+  }
+  const calibratedA4Hz = CalibrationStore.computeCalibratedA4Hz(profile, state.a4ReferenceHz);
+  mic.pipeline.setCalibration({
+    evidenceProvider: (midi) => CalibrationStore.getEvidenceForMidi(profile, midi),
+    calibratedA4Hz,
+    noiseFloorDb: profile.noiseFloorDb,
+  });
+}
+
+const calibrationWizard = new PianoCalibrationWizard({
+  store: calStore,
+  onProfileChanged: (profile) => applyCalibrationToPipeline(profile),
+  ensureMicRunning: async () => {
+    if (!mic.isRunning) await toggleMic();
+    return mic.isRunning;
+  },
+});
+
 function switchView(viewName) {
   state.view = viewName;
   document.querySelectorAll('.tab').forEach((t) => {
@@ -100,6 +126,9 @@ function switchView(viewName) {
   document.querySelectorAll('.view').forEach((v) => {
     v.classList.toggle('active', v.id === `view-${viewName}`);
   });
+  if (viewName === 'calibrate') {
+    requestAnimationFrame(() => calibrationWizard._renderKeyboard());
+  }
 }
 
 // ---------------- Microphone Lifecycle ----------------
@@ -145,6 +174,7 @@ async function toggleMic() {
       onSnapshot: handleAudioSnapshot,
       onNoteEvent: handleAudioNoteEvent,
     });
+    applyCalibrationToPipeline(calibrationWizard.activeProfile);
     $('micDot').classList.add('on');
     $('micStatusText').textContent = `${pipeline.config.sampleRate} Hz`;
     $('globalMicBtn').textContent = 'Disable Mic';
@@ -167,18 +197,12 @@ function handleAudioSnapshot(snap) {
   if (now - lastDomSnapMs < 50) return;
   lastDomSnapMs = now;
 
-  // Update Calibration screen
+  // Update Calibrate Your Piano screen
   if (state.view === 'calibrate') {
     $('calRms').textContent = `${snap.rmsDb.toFixed(1)} dB`;
     $('calFloor').textContent = `${snap.noiseFloorDb.toFixed(1)} dB`;
     $('calGate').textContent = `${state.noiseGateDb.toFixed(1)} dB`;
-    $('calNote').textContent = snap.noteName;
-    $('calFreq').textContent = snap.hasPitch ? `${snap.frequencyHz.toFixed(2)} Hz` : '0.00 Hz';
-    $('calConf').textContent = `Confidence: ${Math.round(snap.confidence * 100)}%`;
-    if (snap.hasPitch && snap.midiNote === 60 && snap.confidence >= 0.75) {
-      $('calVerifyBadge').textContent = `Middle C (C4) verified! (${snap.frequencyHz.toFixed(1)} Hz · ${Math.round(snap.confidence * 100)}%)`;
-      $('calVerifyBadge').classList.add('ok');
-    }
+    calibrationWizard.onAudioSnapshot(snap);
   }
 
   // Update Audio Recognition Debugger screen
@@ -1034,6 +1058,7 @@ function hydrateSettingsUi() {
 
 // Init (wire events first so UI buttons are always responsive)
 wireEvents();
+calibrationWizard.init();
 hydrateSettingsUi();
 refreshAudioDevices();
 renderSongLibrary();

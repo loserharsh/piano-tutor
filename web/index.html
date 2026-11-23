@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="theme-color" content="#141922" />
   <title>PianoTutor — Microphone-Based Real Piano Learning</title>
-  <link rel="manifest" href="./manifest.json?v=7" />
+  <link rel="manifest" href="./manifest.json?v=8" />
   <link rel="icon" type="image/svg+xml" href="./icon.svg" />
-  <link rel="stylesheet" href="./styles.css?v=7" />
+  <link rel="stylesheet" href="./styles.css?v=8" />
 </head>
 <body>
   <header class="topbar">
@@ -22,7 +22,7 @@
     <nav class="nav-tabs" id="navTabs">
       <button class="tab active" data-view="library">Song Library</button>
       <button class="tab" data-view="practice">Practice</button>
-      <button class="tab" data-view="calibrate">Calibrate Mic</button>
+      <button class="tab" data-view="calibrate">Calibrate Piano</button>
       <button class="tab" data-view="tester">DSP Debug</button>
       <button class="tab" data-view="settings">Settings</button>
     </nav>
@@ -146,15 +146,139 @@
       </div>
     </section>
 
-    <!-- VIEW 3: MICROPHONE CALIBRATION -->
+    <!-- VIEW 3: CALIBRATE YOUR PIANO WIZARD -->
     <section id="view-calibrate" class="view">
-      <h1>Microphone Calibration</h1>
-      <p class="muted">Position your phone or computer microphone near the piano (30–90 cm away) and verify clean signal pickup.</p>
+      <div class="section-header">
+        <div>
+          <h1>Calibrate Your Piano</h1>
+          <p class="muted">Calibrate microphone-based note recognition for your specific physical piano or electronic keyboard. No MIDI hardware required.</p>
+        </div>
+        <div class="toolbar-group">
+          <select id="selCalProfile" class="select" title="Saved Keyboard Profiles">
+            <option value="">No Calibration Profile (Default)</option>
+          </select>
+          <button id="btnCalRecalAll" class="btn btn-secondary" disabled>Recalibrate All</button>
+          <button id="btnCalDeleteProfile" class="btn btn-secondary" disabled>Delete Profile</button>
+        </div>
+      </div>
 
+      <!-- STEPS 1-4: GUIDED SETUP -->
+      <div class="card" style="margin-bottom:14px;">
+        <div class="label-xs" style="margin-bottom:10px;">SETUP YOUR INSTRUMENT PROFILE</div>
+        <div class="card-grid" style="grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px;">
+          <div>
+            <div class="label-xs" style="margin-bottom:4px;">PROFILE NAME</div>
+            <input id="inpCalProfileName" type="text" placeholder="e.g. Living Room Upright" style="width:100%;background:#0d1015;color:#f1f5f9;border:1px solid #263040;border-radius:6px;padding:7px 9px;" />
+          </div>
+          <div>
+            <div class="label-xs" style="margin-bottom:4px;">1. PIANO TYPE</div>
+            <select id="selCalPianoType" class="select" style="width:100%;">
+              <option value="acoustic">Acoustic Piano</option>
+              <option value="electronic">Electronic Keyboard</option>
+            </select>
+          </div>
+          <div>
+            <div class="label-xs" style="margin-bottom:4px;">2. AUDIO INPUT</div>
+            <select id="selCalAudioInput" class="select" style="width:100%;">
+              <option value="built-in-mic">Built-in Microphone</option>
+              <option value="external-mic">External Microphone</option>
+              <option value="wired-interface">Wired Audio Interface</option>
+            </select>
+          </div>
+          <div>
+            <div class="label-xs" style="margin-bottom:4px;">3. KEYBOARD RANGE</div>
+            <select id="selCalRange" class="select" style="width:100%;">
+              <option value="61">61 Keys (C2–C7)</option>
+              <option value="76">76 Keys (E1–G7)</option>
+              <option value="88" selected>88 Keys (A0–C8)</option>
+              <option value="custom">Custom Range</option>
+            </select>
+          </div>
+          <div>
+            <div class="label-xs" style="margin-bottom:4px;">4. CALIBRATION MODE</div>
+            <select id="selCalMode" class="select" style="width:100%;">
+              <option value="quick" selected>Quick Calibration (Reference Anchors)</option>
+              <option value="full">Full Calibration (Every Key)</option>
+            </select>
+          </div>
+        </div>
+
+        <div id="calCustomRangeRow" class="toolbar-group hidden" style="margin-top:10px;">
+          <label class="muted" style="font-size:12px;">Lowest Key MIDI (21=A0):
+            <input id="inpCalMinMidi" type="number" min="21" max="108" value="36" style="width:70px;background:#0d1015;color:#f1f5f9;border:1px solid #263040;border-radius:6px;padding:4px 6px;" />
+          </label>
+          <label class="muted" style="font-size:12px;">Highest Key MIDI (108=C8):
+            <input id="inpCalMaxMidi" type="number" min="21" max="108" value="96" style="width:70px;background:#0d1015;color:#f1f5f9;border:1px solid #263040;border-radius:6px;padding:4px 6px;" />
+          </label>
+        </div>
+
+        <div style="margin-top:12px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
+          <span class="muted" style="font-size:12px;">Quick mode calibrates distributed reference keys and interpolates cautiously. Full mode calibrates every key individually.</span>
+          <button id="btnCalBegin" class="btn btn-primary">Begin Calibration</button>
+        </div>
+      </div>
+
+      <!-- ACTIVE INDIVIDUAL KEY CALIBRATION CARD -->
+      <div id="calKeyWorkflowCard" class="card hidden" style="margin-bottom:14px;border-color:var(--teal);">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:10px;">
+          <div class="label-xs" style="color:var(--teal);">INDIVIDUAL KEY CALIBRATION</div>
+          <div id="calStepCounter" class="mono muted" style="font-size:12px;">Key 1 of 12</div>
+        </div>
+
+        <div class="card-grid" style="grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px;margin-bottom:12px;">
+          <div style="background:#0d1015;border:1px solid #263040;border-radius:8px;padding:12px;">
+            <div class="label-xs">EXPECTED KEY TO PLAY</div>
+            <div id="calExpectedKey" class="big-note mono" style="color:var(--teal);">C4</div>
+            <div id="calExpectedHz" class="mono muted" style="font-size:12px;">261.63 Hz (MIDI 60)</div>
+          </div>
+
+          <div style="background:#0d1015;border:1px solid #263040;border-radius:8px;padding:12px;">
+            <div class="label-xs">DETECTED FROM MICROPHONE (UNCONFIRMED)</div>
+            <div id="calLiveDetected" class="mono" style="font-size:16px;font-weight:600;margin:8px 0;">Listening... press &amp; hold key</div>
+            <div class="progress-track" style="margin-bottom:8px;"><div id="calHoldBar" class="progress-fill" style="width:0%;"></div></div>
+            <div id="calHarmonicsText" class="mono muted" style="font-size:11px;">Harmonics: --</div>
+          </div>
+        </div>
+
+        <div id="calOctaveWarn" class="error-banner hidden" style="margin-bottom:10px;"></div>
+
+        <div class="toolbar-group">
+          <button id="btnCalConfirm" class="btn btn-primary" disabled>Confirm Key</button>
+          <button id="btnCalMarkRetry" class="btn btn-secondary" disabled>Flag for Retry</button>
+          <button id="btnCalRetryKey" class="btn btn-secondary" disabled>Retry Capture</button>
+          <button id="btnCalSkipKey" class="btn btn-secondary" disabled>Skip Key</button>
+        </div>
+      </div>
+
+      <!-- VISUAL CALIBRATION KEYBOARD -->
+      <div class="card" style="margin-bottom:14px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:8px;">
+          <div class="label-xs">CALIBRATION KEYBOARD MAP · Click any key to recalibrate individually</div>
+          <div class="mono muted" style="font-size:11px;">
+            <span style="color:var(--teal);">■ Target</span> ·
+            <span style="color:var(--green);">■ Calibrated</span> ·
+            <span style="color:var(--amber);">■ Needs Retry</span>
+          </div>
+        </div>
+        <canvas id="calKeyboardCanvas" class="keyboard-canvas" style="height:120px;cursor:pointer;"></canvas>
+      </div>
+
+      <!-- QUALITY REPORT & ROOM NOISE / LATENCY -->
       <div class="card-grid">
         <div class="card">
-          <h3>1. Ambient Room Noise Floor</h3>
-          <p class="muted">Stay quiet for 3 seconds so PianoTutor can measure background noise and set an optimal noise gate.</p>
+          <h3>Calibration Quality Report</h3>
+          <div class="metric-row"><span>Keys Calibrated</span><strong id="calRepCount" class="mono">0 / 88</strong></div>
+          <div class="metric-row"><span>Keys Requiring Retry</span><strong id="calRepRetry" class="mono">0</strong></div>
+          <div class="metric-row"><span>Average Confidence</span><strong id="calRepConf" class="mono">--</strong></div>
+          <div class="metric-row"><span>Mean Tuning Offset</span><strong id="calRepCents" class="mono">--</strong></div>
+          <div class="metric-row"><span>Low Register Accuracy (A0–B2)</span><strong id="calRepLow" class="mono">--</strong></div>
+          <div class="metric-row"><span>Middle Register Accuracy (C3–B5)</span><strong id="calRepMid" class="mono">--</strong></div>
+          <div class="metric-row"><span>High Register Accuracy (C6–C8)</span><strong id="calRepHigh" class="mono">--</strong></div>
+        </div>
+
+        <div class="card">
+          <h3>Ambient Room Noise Floor</h3>
+          <p class="muted">Stay quiet for 3 seconds so PianoTutor can measure room noise and set an optimal noise gate (separate from pitch calibration).</p>
           <div class="metric-row"><span>Current Input RMS</span><strong id="calRms" class="mono">-100.0 dB</strong></div>
           <div class="metric-row"><span>Measured Noise Floor</span><strong id="calFloor" class="mono">-65.0 dB</strong></div>
           <div class="metric-row"><span>Active Noise Gate</span><strong id="calGate" class="mono">-50.0 dB</strong></div>
@@ -163,21 +287,8 @@
         </div>
 
         <div class="card">
-          <h3>2. Piano Audibility Check (Play Middle C / C4)</h3>
-          <p class="muted">Strike <strong>Middle C (C4 · 261.63 Hz)</strong> firmly on your piano to verify pitch accuracy and confidence.</p>
-          <div class="big-readout">
-            <span id="calNote" class="big-note mono">--</span>
-            <div>
-              <div class="mono" id="calFreq">0.00 Hz</div>
-              <div class="mono muted" id="calConf">Confidence: 0%</div>
-            </div>
-          </div>
-          <div id="calVerifyBadge" class="verify-box">Waiting for C4...</div>
-        </div>
-
-        <div class="card">
-          <h3>3. Microphone & Processing Latency</h3>
-          <p class="muted">Audio framing (4096 samples) + acoustic distance introduces ~55–90 ms of latency. PianoTutor subtracts this offset so you are not penalized for late timing.</p>
+          <h3>Microphone &amp; Processing Latency</h3>
+          <p class="muted">Audio framing + acoustic distance introduces ~55–90 ms of latency. PianoTutor subtracts this offset during practice timing.</p>
           <label class="slider-label full">
             Latency Compensation: <strong id="calLatencyVal" class="mono">65 ms</strong>
             <input type="range" id="calLatencySlider" min="0" max="200" step="5" value="65" />
@@ -394,6 +505,6 @@ E D C D | E E E E | D D E D | C4 |</textarea>
       }).catch(function () {});
     }
   </script>
-  <script type="module" src="./src/app.js?v=7"></script>
+  <script type="module" src="./src/app.js?v=8"></script>
 </body>
 </html>

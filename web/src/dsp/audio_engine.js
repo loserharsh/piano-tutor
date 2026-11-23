@@ -62,6 +62,10 @@ export class AudioPipeline {
     // 3-frame low-latency temporal pitch smoother (eliminates isolated 1-frame octave glitches)
     this.recentMidiHistory = [];
 
+    // Optional decoupled calibration evidence hook (supplied by CalibrationStore, never required)
+    this.calibrationEvidenceProvider = options.calibrationEvidenceProvider || null;
+    this.calibratedA4Hz = options.calibratedA4Hz || null;
+
     this.latestSnapshot = this._emptySnapshot();
     this.onNoteEvent = null;
     this.onSnapshot = null;
@@ -70,6 +74,14 @@ export class AudioPipeline {
     this.recordOriginSec = 0;
     this.activeRecNotes = new Map();
     this.recordedNotes = [];
+  }
+
+  setCalibration({ evidenceProvider = null, calibratedA4Hz = null, noiseFloorDb = null } = {}) {
+    this.calibrationEvidenceProvider = evidenceProvider;
+    this.calibratedA4Hz = calibratedA4Hz;
+    if (typeof noiseFloorDb === 'number' && Number.isFinite(noiseFloorDb)) {
+      this.noiseFloorDb = noiseFloorDb;
+    }
   }
 
   setMode(mode) {
@@ -97,6 +109,7 @@ export class AudioPipeline {
       isAttackTransient: false,
       octaveCandidates: [],
       spectrumPeaks: [],
+      harmonicProfile: [],
       detectedNotes: [],
       rmsDb: -100,
       noiseFloorDb: -65,
@@ -277,10 +290,18 @@ export class AudioPipeline {
     let octaveCorrection = 'none';
     let octaveCandidates = [];
 
-    // Use stricter confidence gate during percussive hammer attack transient
-    const frameConfig = isAttackTransient
-      ? { ...this.config, minConfidence: Math.max(this.config.minConfidence, 0.72) }
-      : this.config;
+    // Use stricter confidence gate during percussive hammer attack transient;
+    // pass optional decoupled calibration evidence & effective A4 tuning reference.
+    const effectiveA4 = this.calibratedA4Hz || this.config.a4ReferenceHz;
+    const frameConfig = {
+      ...this.config,
+      a4ReferenceHz: effectiveA4,
+      baseA4ReferenceHz: this.config.a4ReferenceHz,
+      minConfidence: isAttackTransient
+        ? Math.max(this.config.minConfidence, 0.72)
+        : this.config.minConfidence,
+      getCalibrationEvidence: this.calibrationEvidenceProvider,
+    };
 
     if (this.config.mode === 'polyphonic') {
       if (rmsDb >= effectiveGate) {
@@ -370,6 +391,9 @@ export class AudioPipeline {
     const spectrumPeaks = rmsDb >= effectiveGate
       ? this._extractSpectralPeaks(activeMag, windowSizeUsed, 6)
       : [];
+    const harmonicProfile = primary
+      ? this._extractHarmonicProfile(activeMag, windowSizeUsed, primary.frequencyHz, primary.midiNote)
+      : [];
 
     const processingMs = typeof performance !== 'undefined' ? (performance.now() - t0) : 0;
     const detectionLatencyMs = ((windowSizeUsed * 0.5 + this.config.hopSize) / this.config.sampleRate) * 1000 + processingMs;
@@ -401,6 +425,7 @@ export class AudioPipeline {
       isAttackTransient,
       octaveCandidates,
       spectrumPeaks,
+      harmonicProfile,
       detectedNotes,
       rmsDb,
       noiseFloorDb: this.noiseFloorDb,
@@ -469,6 +494,30 @@ export class AudioPipeline {
     }
     peaks.sort((a, b) => b.magnitude - a.magnitude);
     return peaks.slice(0, maxPeaks).sort((a, b) => a.frequencyHz - b.frequencyHz);
+  }
+
+  _extractHarmonicProfile(magSpec, fftSize, f0Hz, midi) {
+    if (!f0Hz || f0Hz < 20) return [];
+    const binHz = this.config.sampleRate / fftSize;
+    const maxBin = magSpec.length - 1;
+    const B = midi < 36 ? 0.00025 : (midi < 48 ? 0.00018 : (midi < 72 ? 0.00038 : 0.0012));
+    const raw = [];
+    let maxH = 1e-6;
+    for (let h = 1; h <= 6; h++) {
+      const fh = h * f0Hz * Math.sqrt(1 + B * h * h);
+      if (fh > this.config.sampleRate * 0.45) {
+        raw.push(0);
+        continue;
+      }
+      const c = Math.round(fh / binHz);
+      const lo = Math.max(1, c - 1);
+      const hi = Math.min(maxBin, c + 1);
+      let p = 0;
+      for (let b = lo; b <= hi; b++) if (magSpec[b] > p) p = magSpec[b];
+      raw.push(p);
+      if (p > maxH) maxH = p;
+    }
+    return raw.map((v) => Math.round((v / maxH) * 1000) / 1000);
   }
 
   _computeLogSpectrum(magSpec, fftSize) {

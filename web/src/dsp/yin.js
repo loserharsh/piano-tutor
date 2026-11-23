@@ -265,18 +265,33 @@ export class YinPitchEstimator {
                           candDown.cmndf <= this.cmndf[bestTau] + 0.14;
 
         // Works even when H1 is 100% missing (phone mic rolloff) because H3/H5/H7 prove f/2!
-        const hasMissingF0Proof = candDown.oddPeakCount >= 2 && oddRatio > 0.12;
+        const calEvidence = config.getCalibrationEvidence ? config.getCalibrationEvidence(candDown.midiNote) : null;
+        const oddThreshold = calEvidence?.weakFundamentalExpected ? 0.08 : 0.12;
+        const hasMissingF0Proof = candDown.oddPeakCount >= 2 && oddRatio > oddThreshold;
         const hasWeakF0Proof = candDown.oddPeakCount >= 1 && localPeakNear(candDown.frequencyHz, 1) > 0.12 * refE;
 
         if (cmndfGood && (hasMissingF0Proof || hasWeakF0Proof)) {
           finalFreqHz = candDown.frequencyHz;
           finalTau = candDown.tau;
-          correction = 'octave-down (missing/weak f0)';
+          correction = calEvidence ? 'octave-down (calibrated f0 evidence)' : 'octave-down (missing/weak f0)';
         }
       }
     }
 
-    const { midi, cents } = hzToMidi(finalFreqHz, config.a4ReferenceHz);
+    // Apply cautious calibrated local stretch-tuning offset if available for this instrument
+    const rawMap = hzToMidi(finalFreqHz, config.a4ReferenceHz);
+    let midi = rawMap.midi;
+    let cents = rawMap.cents;
+    if (config.getCalibrationEvidence && midi >= PIANO_MIN_MIDI && midi <= PIANO_MAX_MIDI) {
+      const ev = config.getCalibrationEvidence(midi);
+      if (ev && Math.abs(ev.expectedCentsOffset) > 1.0) {
+        const baseA4 = config.baseA4ReferenceHz || config.a4ReferenceHz;
+        const adjustedHz = finalFreqHz * Math.pow(2, -ev.expectedCentsOffset / 1200);
+        const adjMap = hzToMidi(adjustedHz, baseA4);
+        midi = adjMap.midi;
+        cents = adjMap.cents;
+      }
+    }
     if (midi < PIANO_MIN_MIDI || midi > PIANO_MAX_MIDI) return null;
 
     const bestCmndf = finalTau >= 1 && finalTau < half ? this.cmndf[finalTau] : this.cmndf[bestTau];
