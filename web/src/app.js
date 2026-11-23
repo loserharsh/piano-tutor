@@ -1032,11 +1032,6 @@ function hydrateSettingsUi() {
   $('setA4Val').textContent = `${state.a4ReferenceHz} Hz`;
 }
 
-// Register PWA service worker and auto-reload cleanly when a new version activates
-if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('./sw.js', { updateViaCache: 'none' }).catch(() => {});
-}
-
 // Init (wire events first so UI buttons are always responsive)
 wireEvents();
 hydrateSettingsUi();

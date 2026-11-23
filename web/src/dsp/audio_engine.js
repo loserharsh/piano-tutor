@@ -547,13 +547,12 @@ export class WebMicrophoneCapture {
     }
 
     const audioConstraints = {
-      channelCount: 1,
       echoCancellation: false,
       noiseSuppression: false,
       autoGainControl: false,
     };
     if (options.deviceId && options.deviceId !== 'default') {
-      audioConstraints.deviceId = { exact: options.deviceId };
+      audioConstraints.deviceId = { ideal: options.deviceId };
     }
 
     try {
@@ -562,13 +561,16 @@ export class WebMicrophoneCapture {
         video: false,
       });
     } catch (err) {
-      if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+      if (err.name === 'OverconstrainedError') {
+        // Fallback to unconstrained audio if browser rejects raw-audio flags
+        this.stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      } else if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
         throw new Error('Microphone permission denied. Please allow microphone access to listen to your piano.');
+      } else if (err.name === 'NotFoundError') {
+        throw new Error('No microphone detected on this device.');
+      } else {
+        throw new Error(`Audio input error: ${err.message || err.name}`);
       }
-      if (err.name === 'NotFoundError' || err.name === 'OverconstrainedError') {
-        throw new Error('Selected audio input device not found. Try System Default.');
-      }
-      throw new Error(`Audio input error: ${err.message || err.name}`);
     }
 
     const AudioCtx = window.AudioContext || window.webkitAudioContext;

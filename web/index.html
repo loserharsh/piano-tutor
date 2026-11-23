@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="theme-color" content="#141922" />
   <title>PianoTutor — Microphone-Based Real Piano Learning</title>
-  <link rel="manifest" href="./manifest.json" />
+  <link rel="manifest" href="./manifest.json?v=7" />
   <link rel="icon" type="image/svg+xml" href="./icon.svg" />
-  <link rel="stylesheet" href="./styles.css" />
+  <link rel="stylesheet" href="./styles.css?v=7" />
 </head>
 <body>
   <header class="topbar">
@@ -379,6 +379,21 @@ E D C D | E E E E | D D E D | C4 |</textarea>
     </div>
   </div>
 
-  <script type="module" src="./src/app.js"></script>
+  <script>
+    window.addEventListener('error', function (e) {
+      var el = document.getElementById('errorBanner');
+      if (el) { el.textContent = 'Runtime error: ' + (e.message || e.error); el.classList.remove('hidden'); }
+    });
+    window.addEventListener('unhandledrejection', function (e) {
+      var el = document.getElementById('errorBanner');
+      if (el) { el.textContent = 'Async error: ' + (e.reason && e.reason.message ? e.reason.message : e.reason); el.classList.remove('hidden'); }
+    });
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.getRegistrations().then(function (regs) {
+        regs.forEach(function (r) { r.unregister(); });
+      }).catch(function () {});
+    }
+  </script>
+  <script type="module" src="./src/app.js?v=7"></script>
 </body>
 </html>
